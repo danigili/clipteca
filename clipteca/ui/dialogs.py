@@ -68,7 +68,8 @@ def ask_open_catalog(parent, start_dir: str = "") -> Path | None:
 class ExportDialog(QDialog):
     SCOPE_VIEW, SCOPE_ALL, SCOPE_SELECTION = 0, 1, 2
 
-    def __init__(self, parent, n_view: int, n_all: int, n_sel: int, last_dest: str = ""):
+    def __init__(self, parent, n_view: int, n_all: int, n_sel: int, last_dest: str = "",
+                 xmp_sidecar: bool = False):
         super().__init__(parent)
         self.setWindowTitle("Exportar vídeos")
         lay = QVBoxLayout(self)
@@ -146,9 +147,13 @@ class ExportDialog(QDialog):
         self.keep.setChecked(True)
         self.tags = QCheckBox("Escribir palabras clave y personas (XMP)")
         self.tags.setChecked(True)
+        self.sidecar = QCheckBox("Crear también un .xmp al lado de cada vídeo (PiGallery2…)")
+        self.sidecar.setToolTip("clip.mp4 → clip.mp4.xmp con etiquetas, fecha y GPS. Para programas que "
+                                "no leen el XMP incrustado en los vídeos, como PiGallery2.")
+        self.sidecar.setChecked(xmp_sidecar)
         self.shift = QCheckBox("Ajustar la fecha de captura al inicio del recorte")
         self.shift.setToolTip("Desactivado: el vídeo exportado conserva exactamente la fecha del original.")
-        for w in (self.keep, self.tags, self.shift):
+        for w in (self.keep, self.tags, self.sidecar, self.shift):
             lay.addWidget(w)
 
         self.note = QLabel()
@@ -208,6 +213,7 @@ class ExportDialog(QDialog):
             keep_structure=self.keep.isChecked(),
             conflict=self.conflict.currentData(),
             write_tags=self.tags.isChecked(),
+            xmp_sidecar=self.sidecar.isChecked(),
         )
 
 

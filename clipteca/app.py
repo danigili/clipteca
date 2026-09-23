@@ -592,7 +592,8 @@ class MainWindow(QMainWindow):
         self.timeline.set_duration(v.duration or 0)
         self.timeline.set_trim(v.trim_in, v.trim_out)
         self._trim_label(v.trim_in, v.trim_out)
-        self.player.set_rotation((v.row.get("rotation") or 0) + v.rot_offset)
+        # mpv ya aplica la rotación del contenedor; solo se añade la manual
+        self.player.set_rotation(v.rot_offset)
         if v.id == self.loaded_id:
             return
         self.loaded_id = v.id
@@ -848,11 +849,13 @@ class MainWindow(QMainWindow):
         all_picked = self.catalog.query(Filter(flag="picked"))
         sel = self.selected_videos() if self.grid.selectionModel().hasSelection() else []
         dlg = ExportDialog(self, len(view_picked), len(all_picked), len(sel),
-                           self.settings.value("last_export", ""))
+                           self.settings.value("last_export", ""),
+                           self.settings.value("export_xmp_sidecar", False, type=bool))
         if not dlg.exec():
             return
         opts = dlg.options()
         self.settings.setValue("last_export", str(opts.dest))
+        self.settings.setValue("export_xmp_sidecar", opts.xmp_sidecar)
         vids = {ExportDialog.SCOPE_VIEW: view_picked, ExportDialog.SCOPE_ALL: all_picked,
                 ExportDialog.SCOPE_SELECTION: sel}[dlg.scope_id()]
         vids = [self.catalog.get(v.id) for v in vids]  # datos frescos

@@ -54,6 +54,7 @@ class ExportOptions:
     keep_structure: bool = True    # recrea subcarpetas relativas a la raíz común
     conflict: str = "rename"       # rename | skip | overwrite
     write_tags: bool = True
+    xmp_sidecar: bool = False      # .xmp al lado también en mp4/mov (PiGallery2 no lee el XMP embebido)
 
 
 @dataclass
@@ -287,7 +288,9 @@ def write_embedded(dst: Path, src: str, item: ExportItem, cap: datetime | None,
         ]
     if opts.write_tags:
         for kw in item.keywords + item.people:
-            args += [f"-XMP-dc:Subject-={kw}", f"-XMP-dc:Subject+={kw}"]
+            args += [f"-XMP-dc:Subject-={kw}", f"-XMP-dc:Subject+={kw}",
+                     # WM/Category: lo que el Explorador de Windows muestra como "Etiquetas"
+                     f"-Microsoft:Category-={kw}", f"-Microsoft:Category+={kw}"]
         for kw in item.keywords:
             args += [f"-XMP-lr:HierarchicalSubject-={kw}", f"-XMP-lr:HierarchicalSubject+={kw}"]
         for p in item.people:
@@ -298,26 +301,47 @@ def write_embedded(dst: Path, src: str, item: ExportItem, cap: datetime | None,
         _exiftool(args + [str(dst)])
 
 
-def write_sidecar(dst: Path, item: ExportItem, cap: datetime | None) -> Path:
-    """Para contenedores sin XMP embebido (mkv, avi, mts...): fichero .xmp al lado."""
+def _xmp_gps(value: float, pos: str, neg: str) -> str:
+    """Coordenada en formato XMP-exif: "DDD,MM.mmmmmmR"."""
+    a = abs(value)
+    deg = int(a)
+    return f"{deg},{(a - deg) * 60:.6f}{pos if value >= 0 else neg}"
+
+
+def sidecar_path(dst: Path) -> Path:
+    # clip.mp4.xmp (no clip.xmp): no choca con clip.jpg/clip.mov de la misma carpeta
+    return dst.with_name(dst.name + ".xmp")
+
+
+def write_sidecar(dst: Path, item: ExportItem, cap: datetime | None, tags: bool = True) -> Path:
+    """Fichero .xmp al lado: para contenedores sin XMP embebido (mkv, avi, mts...) o
+    para programas que solo leen sidecars en vídeo (PiGallery2)."""
     def bag(tag: str, values: list[str]) -> str:
         if not values:
             return ""
         li = "".join(f"<rdf:li>{escape(x)}</rdf:li>" for x in values)
         return f"<{tag}><rdf:Bag>{li}</rdf:Bag></{tag}>"
-    hier = item.keywords + [f"{PEOPLE_ROOT}|{p}" for p in item.people]
+    keywords = item.keywords if tags else []
+    people = item.people if tags else []
+    hier = keywords + [f"{PEOPLE_ROOT}|{p}" for p in people]
     date = ""
     if cap:
         tz = _tz(item.video.row.get("tz_offset")) or timezone.utc
         date = f"<xmp:CreateDate>{cap.astimezone(tz).isoformat(timespec='seconds')}</xmp:CreateDate>"
+    gps = ""
+    lat, lon = item.video.row.get("lat"), item.video.row.get("lon")
+    if lat is not None and lon is not None:
+        gps = (f"<exif:GPSLatitude>{_xmp_gps(lat, 'N', 'S')}</exif:GPSLatitude>"
+               f"<exif:GPSLongitude>{_xmp_gps(lon, 'E', 'W')}</exif:GPSLongitude>")
     xml = f"""<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
- xmlns:lr="http://ns.adobe.com/lightroom/1.0/" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">
-{date}{bag('dc:subject', item.keywords + item.people)}{bag('lr:hierarchicalSubject', hier)}{bag('Iptc4xmpExt:PersonInImage', item.people)}
+ xmlns:lr="http://ns.adobe.com/lightroom/1.0/" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
+ xmlns:exif="http://ns.adobe.com/exif/1.0/">
+{date}{gps}{bag('dc:subject', keywords + people)}{bag('lr:hierarchicalSubject', hier)}{bag('Iptc4xmpExt:PersonInImage', people)}
 </rdf:Description></rdf:RDF></x:xmpmeta>
 <?xpacket end="w"?>"""
-    sc = dst.with_suffix(".xmp")
+    sc = sidecar_path(dst)
     sc.write_text(xml, encoding="utf-8")
     return sc
 
@@ -378,8 +402,8 @@ def export_one(item: ExportItem, dst: Path, opts: ExportOptions,
         if embed:
             write_embedded(tmp, src, item, cap, copy_from_src=reencode, shifted=shifted, opts=opts)
         os.replace(tmp, dst)
-        if not embed and opts.write_tags and (item.keywords or item.people or cap):
-            write_sidecar(dst, item, cap)
+        if opts.xmp_sidecar or (not embed and opts.write_tags and (item.keywords or item.people or cap)):
+            write_sidecar(dst, item, cap, tags=opts.write_tags)
         if cap:
             set_file_times(dst, cap)
         return dst
