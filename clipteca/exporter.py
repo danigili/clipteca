@@ -25,12 +25,24 @@ ENCODERS = {  # codec origen -> (encoder, args de calidad)
     "av1": ("libsvtav1", lambda crf: ["-crf", str(crf + 10), "-preset", "8"]),
 }
 
+# Modo "comprimir mucho": HEVC con CRF fijo (calidad constante) tope de
+# bitrate/bufsize (VBV) para que las escenas complicadas no se disparen de
+# tamaño — el híbrido habitual en encoders de entrega, similar al recorte de
+# WhatsApp pero con mejor calidad por bit gracias a HEVC.
+COMPRESS_MAX_LONG_EDGE = 1920
+COMPRESS_MAX_SHORT_EDGE = 1080
+COMPRESS_CRF = 28
+COMPRESS_MAXRATE = "1800k"
+COMPRESS_BUFSIZE = "3600k"
+COMPRESS_AUDIO_BITRATE = "128k"
+
 
 @dataclass
 class ExportOptions:
     dest: Path
     precise: bool = False          # False = corte sin pérdida en keyframe; True = recodifica
     crf: int = 18
+    compress: bool = False         # HEVC, máx. 1080p, CRF+bitrate tope (ignora precise/crf)
     date_shift: bool = False       # True = fecha de captura + inicio del recorte
     keep_structure: bool = True    # recrea subcarpetas relativas a la raíz común
     conflict: str = "rename"       # rename | skip | overwrite
@@ -112,6 +124,24 @@ def set_file_times(path: Path, dt: datetime) -> None:
 
 # --- ffmpeg ------------------------------------------------------------
 
+def _compress_filter(v: Video) -> str:
+    """Escala hacia abajo (máx. 1920 en el lado largo, 1080 en el corto, sin ampliar
+    ni importar la orientación) y, si el original es HDR, tonemapea a SDR antes de
+    reinterpretar los píxeles como BT.709 (si no, sale lavado/oscuro)."""
+    filters = []
+    if (v.row.get("color_trc") or "") in ("arib-std-b67", "smpte2084"):
+        filters.append(
+            "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+            "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+        )
+    filters.append(
+        f"scale='if(gt(a,1),{COMPRESS_MAX_LONG_EDGE},{COMPRESS_MAX_SHORT_EDGE})':"
+        f"'if(gt(a,1),{COMPRESS_MAX_SHORT_EDGE},{COMPRESS_MAX_LONG_EDGE})':"
+        "force_original_aspect_ratio=decrease:force_divisible_by=2"
+    )
+    return ",".join(filters)
+
+
 def ffmpeg_args(v: Video, src: str, dst: str, start: float, dur: float, opts: ExportOptions) -> list[str]:
     ff = tools.find_tool("ffmpeg")
     if not ff:
@@ -121,7 +151,15 @@ def ffmpeg_args(v: Video, src: str, dst: str, start: float, dur: float, opts: Ex
          "-ss", f"{start:.3f}", "-i", src, "-t", f"{dur:.3f}",
          "-map", "0:v:0", "-map", "0:a?",   # evita pistas de datos (giroscopio, etc.)
          "-map_metadata", "0", "-map_chapters", "-1"]
-    if opts.precise:
+    out_is_hevc = False
+    if opts.compress:
+        a += ["-vf", _compress_filter(v),
+              "-c:v", "libx265", "-crf", str(COMPRESS_CRF), "-preset", "medium",
+              "-maxrate", COMPRESS_MAXRATE, "-bufsize", COMPRESS_BUFSIZE,
+              "-pix_fmt", "yuv420p",
+              "-c:a", "aac", "-b:a", COMPRESS_AUDIO_BITRATE, "-ac", "2"]
+        out_is_hevc = True
+    elif opts.precise:
         vc = v.row.get("vcodec") or ""
         enc, q = ENCODERS.get(vc, ENCODERS["h264"])
         a += ["-c:v", enc, *q(opts.crf)]
@@ -133,11 +171,12 @@ def ffmpeg_args(v: Video, src: str, dst: str, start: float, dur: float, opts: Ex
             if val and val != "unknown":
                 a += [opt, val]
         a += ["-c:a", "copy"]
+        out_is_hevc = vc == "hevc"
     else:
         a += ["-c", "copy", "-avoid_negative_ts", "make_zero"]
     if ext in MP4_FAMILY:
         a += ["-movflags", "+faststart+use_metadata_tags"]
-        if (v.row.get("vcodec") == "hevc"):
+        if out_is_hevc:
             a += ["-tag:v", "hvc1"]
     a += ["-progress", "pipe:1", "-nostats", dst]
     return a
@@ -293,7 +332,7 @@ def export_one(item: ExportItem, dst: Path, opts: ExportOptions,
     cap = output_capture_time(v, opts)
     shifted = trimmed and opts.date_shift and bool(v.trim_in)
     try:
-        if trimmed or opts.precise:
+        if trimmed or opts.precise or opts.compress:
             if dur is None:
                 start, dur = 0.0, v.duration or 0.0
             run_ffmpeg(ffmpeg_args(v, src, str(tmp), start, dur, opts), dur, on_progress, cancelled)
@@ -303,7 +342,7 @@ def export_one(item: ExportItem, dst: Path, opts: ExportOptions,
             on_progress(1.0)
         embed = dst.suffix.lower() in XMP_EMBED_EXTS
         if embed:
-            write_embedded(tmp, src, item, cap, copy_from_src=trimmed or opts.precise,
+            write_embedded(tmp, src, item, cap, copy_from_src=trimmed or opts.precise or opts.compress,
                            shifted=shifted, opts=opts)
         os.replace(tmp, dst)
         if not embed and opts.write_tags and (item.keywords or item.people or cap):

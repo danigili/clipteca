@@ -108,8 +108,7 @@ class ExportDialog(QDialog):
         self.crf.setValue(18)
         self.crf.setToolTip("Calidad al recodificar (CRF). Menor = más calidad y más tamaño.")
         form.addRow("Calidad (CRF)", self.crf)
-        self.mode.currentIndexChanged.connect(lambda _: self.crf.setEnabled(self.mode.currentData()))
-        self.crf.setEnabled(False)
+        self.mode.currentIndexChanged.connect(lambda _: self._update_mode_enabled())
 
         self.conflict = QComboBox()
         self.conflict.addItem("Renombrar (añadir _1, _2…)", "rename")
@@ -117,6 +116,14 @@ class ExportDialog(QDialog):
         self.conflict.addItem("Sobrescribir", "overwrite")
         form.addRow("Si ya existe", self.conflict)
         lay.addLayout(form)
+
+        self.compress = QCheckBox("Comprimir mucho: HEVC, máx. 1080p, ~1.8 Mbps")
+        self.compress.setToolTip(
+            "Ignora el modo de recorte y la calidad de arriba: siempre recodifica a HEVC, "
+            "reescala hacia abajo a 1080p y limita el bitrate (CRF con tope de tamaño)."
+        )
+        self.compress.toggled.connect(lambda _: self._update_mode_enabled())
+        lay.addWidget(self.compress)
 
         self.keep = QCheckBox("Mantener la estructura de subcarpetas (fechas)")
         self.keep.setChecked(True)
@@ -127,11 +134,11 @@ class ExportDialog(QDialog):
         for w in (self.keep, self.tags, self.shift):
             lay.addWidget(w)
 
-        note = QLabel("En modo sin pérdida el inicio real puede adelantarse hasta el fotograma clave anterior "
-                      "(≈1 s en móviles). Formato, códec y HDR se mantienen.")
-        note.setWordWrap(True)
-        note.setStyleSheet("color:#8b8e95;")
-        lay.addWidget(note)
+        self.note = QLabel()
+        self.note.setWordWrap(True)
+        self.note.setStyleSheet("color:#8b8e95;")
+        lay.addWidget(self.note)
+        self._update_mode_enabled()
 
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText("Exportar")
@@ -139,6 +146,18 @@ class ExportDialog(QDialog):
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
         self.resize(520, 0)
+
+    def _update_mode_enabled(self):
+        compressing = self.compress.isChecked()
+        self.mode.setEnabled(not compressing)
+        self.crf.setEnabled(not compressing and bool(self.mode.currentData()))
+        if compressing:
+            self.note.setText("Se recodifica siempre a HEVC 1080p con bitrate limitado (~1.8 Mbps vídeo + "
+                              "128 kbps audio AAC). El HDR se convierte a SDR. Pensado para compartir, no "
+                              "para conservar calidad original.")
+        else:
+            self.note.setText("En modo sin pérdida el inicio real puede adelantarse hasta el fotograma clave "
+                              "anterior (≈1 s en móviles). Formato, códec y HDR se mantienen.")
 
     def _pick(self):
         d = QFileDialog.getExistingDirectory(self, "Carpeta de destino", self.dest.text())
@@ -162,6 +181,7 @@ class ExportDialog(QDialog):
             dest=Path(self.dest.text().strip()),
             precise=bool(self.mode.currentData()),
             crf=self.crf.value(),
+            compress=self.compress.isChecked(),
             date_shift=self.shift.isChecked(),
             keep_structure=self.keep.isChecked(),
             conflict=self.conflict.currentData(),
