@@ -93,7 +93,7 @@ class Inspector(QScrollArea):
         self.lbl = {}
         for key, label in (("date", "Captura"), ("date_src", "Origen fecha"), ("duration", "Duración"),
                            ("trim", "Recorte"), ("video", "Vídeo"), ("color", "Color"),
-                           ("folder", "Carpeta"), ("location", "Ubicación")):
+                           ("camera", "Cámara"), ("folder", "Carpeta"), ("location", "Ubicación")):
             w = QLabel("–")
             w.setWordWrap(True)
             w.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -174,6 +174,7 @@ class Inspector(QScrollArea):
         trc = r.get("color_trc") or "?"
         hdr = {"arib-std-b67": "HDR HLG", "smpte2084": "HDR PQ"}.get(trc, "SDR")
         self.lbl["color"].setText(f"{hdr} · {r.get('pix_fmt') or '?'} · {r.get('color_primaries') or '?'}")
+        self.lbl["camera"].setText(r.get("camera_model") or "–")
         self.lbl["folder"].setText(v.folder)
         if v.has_gps:
             src = {"exif": "GPS", "manual": "manual"}.get(r.get("geo_src"), "?")

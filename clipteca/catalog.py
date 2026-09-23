@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings(
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS videos(
     color_space   TEXT,
     bit_rate      INTEGER,
     rotation      INTEGER DEFAULT 0,
+    camera_model  TEXT,
     flag          INTEGER NOT NULL DEFAULT 0,   -- 1 = P, -1 = X, 0 = sin marcar
     trim_in       REAL,
     trim_out      REAL,
@@ -65,7 +66,8 @@ CREATE TABLE IF NOT EXISTS video_tags(
 
 VIDEO_COLUMNS = (
     "path folder filename size mtime quick_hash capture_time capture_src tz_offset duration "
-    "width height fps vcodec acodec pix_fmt color_primaries color_trc color_space bit_rate rotation"
+    "width height fps vcodec acodec pix_fmt color_primaries color_trc color_space bit_rate rotation "
+    "camera_model"
 ).split()
 
 
@@ -87,6 +89,7 @@ class Filter:
     flag: str = "all"                  # all | picked | unflagged | rejected | not_rejected
     text: str = ""                     # nombre de fichero o etiqueta
     tag_id: int | None = None
+    camera_model: str | None = None
     only_missing: bool = False
     order: str = "capture_time"        # capture_time | filename
 
@@ -160,12 +163,15 @@ class Catalog:
         elif ver < SCHEMA_VERSION:
             self._migrate(ver)
             self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        # Columna ya garantizada (recién creada o migrada): el índice es seguro aquí.
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_camera ON videos(camera_model)")
         self.conn.commit()
 
     def _migrate(self, ver: int) -> None:
         """Añade columnas nuevas a catálogos creados con un esquema anterior."""
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(videos)")}
-        for col, decl in (("lat", "REAL"), ("lon", "REAL"), ("geo_src", "TEXT")):
+        for col, decl in (("lat", "REAL"), ("lon", "REAL"), ("geo_src", "TEXT"),
+                          ("camera_model", "TEXT")):
             if col not in cols:
                 self.conn.execute(f"ALTER TABLE videos ADD COLUMN {col} {decl}")
 
@@ -214,6 +220,9 @@ class Catalog:
         if f.tag_id is not None:
             where.append("id IN (SELECT video_id FROM video_tags WHERE tag_id = ?)")
             args.append(f.tag_id)
+        if f.camera_model is not None:
+            where.append("camera_model = ?")
+            args.append(f.camera_model)
         if f.text.strip():
             for word in f.text.split():
                 like = "%" + fold(word).replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
@@ -245,6 +254,13 @@ class Catalog:
     def folders(self) -> list[tuple[str, int]]:
         return [(r[0], r[1]) for r in self.conn.execute(
             "SELECT folder, COUNT(*) FROM videos GROUP BY folder ORDER BY folder"
+        )]
+
+    def camera_models(self) -> list[tuple[str, int]]:
+        return [(r[0], r[1]) for r in self.conn.execute(
+            "SELECT camera_model, COUNT(*) FROM videos "
+            "WHERE camera_model IS NOT NULL AND camera_model != '' "
+            "GROUP BY camera_model ORDER BY camera_model COLLATE NOCASE"
         )]
 
     def counts(self) -> dict[str, int]:

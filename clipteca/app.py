@@ -27,6 +27,7 @@ from .ui.workers import ExportWorker, ImportWorker, ThumbnailManager
 
 PathRole = Qt.UserRole + 10
 TagRole = Qt.UserRole + 11
+CameraRole = Qt.UserRole + 12
 
 
 class MainWindow(QMainWindow):
@@ -61,11 +62,16 @@ class MainWindow(QMainWindow):
         self.tag_tree.itemClicked.connect(self._tag_clicked)
         self.tag_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tag_tree.customContextMenuRequested.connect(self._tag_menu)
+        self.camera_tree = QTreeWidget()
+        self.camera_tree.setHeaderLabel("Cámaras")
+        self.camera_tree.itemClicked.connect(self._camera_clicked)
         left = QSplitter(Qt.Vertical)
         left.addWidget(self.folder_tree)
         left.addWidget(self.tag_tree)
+        left.addWidget(self.camera_tree)
         left.setStretchFactor(0, 3)
         left.setStretchFactor(1, 2)
+        left.setStretchFactor(2, 1)
 
         # --- centro: barra de filtro + cuadrícula / visor
         bar = QHBoxLayout()
@@ -366,6 +372,7 @@ class MainWindow(QMainWindow):
     def rebuild_trees(self):
         self.folder_tree.clear()
         self.tag_tree.clear()
+        self.camera_tree.clear()
         if not self.catalog:
             return
         c = self.catalog.counts()
@@ -430,6 +437,16 @@ class MainWindow(QMainWindow):
         self.inspector.people.set_suggestions(names["person"])
         self._select_tree_item(self.tag_tree, TagRole, self.filter.tag_id)
 
+        cam_root = QTreeWidgetItem(["Todas"])
+        cam_root.setData(0, CameraRole, None)
+        self.camera_tree.addTopLevelItem(cam_root)
+        for model, n in self.catalog.camera_models():
+            it = QTreeWidgetItem([f"{model}  ({n})"])
+            it.setData(0, CameraRole, model)
+            cam_root.addChild(it)
+        cam_root.setExpanded(True)
+        self._select_tree_item(self.camera_tree, CameraRole, self.filter.camera_model)
+
     @staticmethod
     def _select_tree_item(tree, role, value):
         def walk(item):
@@ -447,6 +464,10 @@ class MainWindow(QMainWindow):
 
     def _tag_clicked(self, item):
         self.filter.tag_id = item.data(0, TagRole)
+        self.requery()
+
+    def _camera_clicked(self, item):
+        self.filter.camera_model = item.data(0, CameraRole)
         self.requery()
 
     def _tag_menu(self, pos):

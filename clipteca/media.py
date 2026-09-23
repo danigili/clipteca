@@ -124,6 +124,28 @@ def location(info: dict) -> tuple[float, float] | None:
     return None
 
 
+# --- cámara -----------------------------------------------------------------
+
+def camera_model(info: dict) -> str | None:
+    """Modelo de cámara/dispositivo a partir de los tags del contenedor, si los hay."""
+    fmt_tags = {k.lower(): v for k, v in (info.get("format", {}).get("tags") or {}).items()}
+    # Apple y Android (com.android.model) ya dan un nombre limpio ("iPhone 13 Pro",
+    # "Pixel 9 Pro"): no hace falta anteponer el fabricante salvo que no esté incluido.
+    for model_key, make_key in (
+        ("com.apple.quicktime.model", None),
+        ("com.android.model", "com.android.manufacturer"),
+        ("model", "make"),
+    ):
+        model = (fmt_tags.get(model_key) or "").strip()
+        if not model:
+            continue
+        make = (fmt_tags.get(make_key) or "").strip() if make_key else ""
+        if make and make.lower() not in model.lower():
+            return f"{make} {model}"
+        return model
+    return None
+
+
 def _fps(s: dict) -> float | None:
     for key in ("avg_frame_rate", "r_frame_rate"):
         v = s.get(key) or ""
@@ -169,6 +191,7 @@ def probe(path: Path) -> dict:
         duration = None
     cap, src, tz = capture_time(info, path)
     loc = location(info)
+    cam = camera_model(info)
     st = path.stat()
     return {
         "path": str(path),
@@ -192,6 +215,7 @@ def probe(path: Path) -> dict:
         "color_space": v.get("color_space"),
         "bit_rate": int(fmt["bit_rate"]) if str(fmt.get("bit_rate", "")).isdigit() else None,
         "rotation": _rotation(v),
+        "camera_model": cam,
         "lat": loc[0] if loc else None,
         "lon": loc[1] if loc else None,
         "geo_src": "exif" if loc else None,
