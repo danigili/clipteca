@@ -61,6 +61,7 @@ class Inspector(QScrollArea):
     tags_added = Signal(str, list)       # kind, names
     tag_removed = Signal(str, str)       # kind, name
     clear_trim_requested = Signal()
+    clear_location_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,7 +93,7 @@ class Inspector(QScrollArea):
         self.lbl = {}
         for key, label in (("date", "Captura"), ("date_src", "Origen fecha"), ("duration", "Duración"),
                            ("trim", "Recorte"), ("video", "Vídeo"), ("color", "Color"),
-                           ("folder", "Carpeta")):
+                           ("folder", "Carpeta"), ("location", "Ubicación")):
             w = QLabel("–")
             w.setWordWrap(True)
             w.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -103,6 +104,10 @@ class Inspector(QScrollArea):
         self.btn_clear_trim.setObjectName("trimBtn")
         self.btn_clear_trim.clicked.connect(self.clear_trim_requested)
         lay.addWidget(self.btn_clear_trim)
+        self.btn_clear_location = QPushButton("Quitar ubicación")
+        self.btn_clear_location.setObjectName("trimBtn")
+        self.btn_clear_location.clicked.connect(self.clear_location_requested)
+        lay.addWidget(self.btn_clear_location)
 
         t1 = QLabel("Palabras clave")
         t1.setObjectName("sectionTitle")
@@ -139,6 +144,7 @@ class Inspector(QScrollArea):
         self.btn_reject.setChecked(flags == {-1})
         single = videos[0] if n == 1 else None
         self.btn_clear_trim.setVisible(bool(single and single.trimmed))
+        self.btn_clear_location.setVisible(bool(single and single.has_gps))
         if not single:
             for w in self.lbl.values():
                 w.setText("–")
@@ -169,3 +175,8 @@ class Inspector(QScrollArea):
         hdr = {"arib-std-b67": "HDR HLG", "smpte2084": "HDR PQ"}.get(trc, "SDR")
         self.lbl["color"].setText(f"{hdr} · {r.get('pix_fmt') or '?'} · {r.get('color_primaries') or '?'}")
         self.lbl["folder"].setText(v.folder)
+        if v.has_gps:
+            src = {"exif": "GPS", "manual": "manual"}.get(r.get("geo_src"), "?")
+            self.lbl["location"].setText(f"{r['lat']:.5f}, {r['lon']:.5f}  ({src})")
+        else:
+            self.lbl["location"].setText("–")

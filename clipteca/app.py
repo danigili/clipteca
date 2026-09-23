@@ -20,6 +20,7 @@ from .ui import theme
 from .ui.dialogs import ExportDialog, WelcomeDialog, ask_new_catalog, ask_open_catalog, shortcuts_html
 from .ui.grid import GridView, VideoModel, VideoRole
 from .ui.inspector import Inspector
+from .ui.mapview import MapView
 from .ui.player import create_player
 from .ui.timeline import Timeline
 from .ui.workers import ExportWorker, ImportWorker, ThumbnailManager
@@ -147,9 +148,27 @@ class MainWindow(QMainWindow):
         ll.addWidget(self.timeline)
         ll.addLayout(ctr)
 
+        self.map_view = MapView()
+        self.map_view.marker_clicked.connect(self._select_video_id)
+        self.map_view.location_dropped.connect(self._locations_dropped)
+
+        # Filmstrip (como el módulo de mapa de Lightroom): comparte modelo y
+        # selección con la cuadrícula grande, así que arrastrar un vídeo al mapa
+        # o hacer clic en un pin queda sincronizado con el resto de la app.
+        self.filmstrip = GridView(self.model)
+        self.filmstrip.set_thumb_width(140)
+        self.filmstrip.set_filmstrip_mode(True)
+        self.filmstrip.setSelectionModel(self.grid.selectionModel())
+        map_page = QSplitter(Qt.Vertical)
+        map_page.addWidget(self.map_view)
+        map_page.addWidget(self.filmstrip)
+        map_page.setStretchFactor(0, 1)
+        map_page.setCollapsible(1, False)
+
         self.stack = QStackedWidget()
         self.stack.addWidget(self.grid)
         self.stack.addWidget(loupe)
+        self.stack.addWidget(map_page)
         center = QWidget()
         cl = QVBoxLayout(center)
         cl.setContentsMargins(0, 0, 0, 0)
@@ -163,6 +182,7 @@ class MainWindow(QMainWindow):
         self.inspector.tags_added.connect(self.add_tags)
         self.inspector.tag_removed.connect(self.remove_tag)
         self.inspector.clear_trim_requested.connect(lambda: self._commit_trim(None, None))
+        self.inspector.clear_location_requested.connect(self._clear_location)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(left)
@@ -216,6 +236,7 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("&Vista")
         self._act(m, "Cuadrícula", self.show_grid, "G")
         self._act(m, "Visor", self.show_loupe, "E")
+        self._act(m, "Mapa", self.show_map, "M")
         self._act(m, "Anterior", lambda: self.navigate(-1), "Left")
         self._act(m, "Siguiente", lambda: self.navigate(1), "Right")
         m.addSeparator()
@@ -468,6 +489,8 @@ class MainWindow(QMainWindow):
         self._selection_changed()
         if self.stack.currentIndex() == 1:
             self._load_current()
+        elif self.stack.currentIndex() == 2:
+            self.map_view.set_videos(videos)
 
     def _update_counts(self):
         if not self.catalog:
@@ -499,6 +522,10 @@ class MainWindow(QMainWindow):
     def _current_changed(self):
         if self.stack.currentIndex() == 1:
             self._load_current()
+        elif self.stack.currentIndex() == 2:
+            v = self.current_video()
+            if v and v.has_gps:
+                self.map_view.highlight(v.id)
 
     def navigate(self, delta: int):
         n = self.model.rowCount()
@@ -515,6 +542,12 @@ class MainWindow(QMainWindow):
         self.player.pause()
         self.stack.setCurrentIndex(0)
         self.grid.setFocus()
+
+    def show_map(self):
+        self.player.pause()
+        self.stack.setCurrentIndex(2)
+        self.map_view.set_videos(self.model.videos)
+        self.map_view.fit_to_markers()
 
     def show_loupe(self):
         if not self.current_video():
@@ -628,6 +661,33 @@ class MainWindow(QMainWindow):
         self.model.refresh_ids([v.id])
         self.timeline.set_trim(a, z)
         self._trim_label(a, z)
+        self._selection_changed()
+
+    # ============================================================= mapa
+    def _select_video_id(self, video_id: int):
+        row = self.model.row_of.get(video_id)
+        if row is None:
+            return
+        idx = self.model.index(row)
+        self.grid.selectionModel().setCurrentIndex(idx, QItemSelectionModel.ClearAndSelect)
+        self.filmstrip.scrollTo(idx)
+
+    def _locations_dropped(self, ids: list, lat: float, lon: float):
+        if not self.catalog:
+            return
+        for vid in ids:
+            self.catalog.set_location(vid, lat, lon)
+        self.model.refresh_ids(ids)
+        self.map_view.set_videos(self.model.videos)
+        self._selection_changed()
+
+    def _clear_location(self):
+        v = self.current_video()
+        if not v or not self.catalog:
+            return
+        self.catalog.clear_location(v.id)
+        self.model.refresh_ids([v.id])
+        self.map_view.set_videos(self.model.videos)
         self._selection_changed()
 
     # ============================================================ marcas

@@ -99,6 +99,31 @@ def capture_time(info: dict, path: Path) -> tuple[str, str, str | None]:
     return dt.isoformat(), "mtime", None
 
 
+# --- GPS ------------------------------------------------------------------
+
+# ISO 6709: +40.7128-074.0060/ (lat, lon; opcional altitud/'/' final)
+_ISO6709 = re.compile(r"^([+-]\d{1,3}(?:\.\d+)?)([+-]\d{1,3}(?:\.\d+)?)")
+
+
+def location(info: dict) -> tuple[float, float] | None:
+    """(lat, lon) a partir de los tags de ubicación del contenedor, si los hay."""
+    fmt_tags = {k.lower(): v for k, v in (info.get("format", {}).get("tags") or {}).items()}
+    for key in ("com.apple.quicktime.location.iso6709", "location", "location-eng"):
+        v = fmt_tags.get(key)
+        if not v:
+            continue
+        m = _ISO6709.match(v.strip())
+        if not m:
+            continue
+        try:
+            lat, lon = float(m.group(1)), float(m.group(2))
+        except ValueError:
+            continue
+        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0.0, 0.0):
+            return lat, lon
+    return None
+
+
 def _fps(s: dict) -> float | None:
     for key in ("avg_frame_rate", "r_frame_rate"):
         v = s.get(key) or ""
@@ -143,6 +168,7 @@ def probe(path: Path) -> dict:
     except ValueError:
         duration = None
     cap, src, tz = capture_time(info, path)
+    loc = location(info)
     st = path.stat()
     return {
         "path": str(path),
@@ -166,6 +192,9 @@ def probe(path: Path) -> dict:
         "color_space": v.get("color_space"),
         "bit_rate": int(fmt["bit_rate"]) if str(fmt.get("bit_rate", "")).isdigit() else None,
         "rotation": _rotation(v),
+        "lat": loc[0] if loc else None,
+        "lon": loc[1] if loc else None,
+        "geo_src": "exif" if loc else None,
     }
 
 

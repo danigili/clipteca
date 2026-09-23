@@ -25,6 +25,14 @@ def bin_dirs() -> list[Path]:
     return [d for d in dirs if d.is_dir()]
 
 
+def webres_dir() -> Path:
+    """Carpeta con los recursos del mapa (leaflet.js/css, map.html)."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "clipteca" / "ui" / "webres"
+    return Path(__file__).resolve().parent / "ui" / "webres"
+
+
 def setup_dll_path() -> None:
     """Añade ./bin al PATH para que python-mpv encuentre libmpv-2.dll."""
     for d in bin_dirs():

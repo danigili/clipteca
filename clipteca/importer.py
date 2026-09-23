@@ -87,8 +87,16 @@ def _store(conn, meta: dict, res: ImportResult) -> None:
     existing = conn.execute("SELECT id FROM videos WHERE path=?", (meta["path"],)).fetchone()
     if existing:
         sets = ", ".join(f"{c}=?" for c in VIDEO_COLUMNS)
-        conn.execute(f"UPDATE videos SET {sets}, missing=0 WHERE id=?",
-                     [meta[c] for c in VIDEO_COLUMNS] + [existing["id"]])
+        # lat/lon/geo_src se refrescan desde los metadatos salvo que el usuario
+        # haya puesto la ubicación a mano (geo_src='manual'): esa no se pisa nunca.
+        conn.execute(
+            f"UPDATE videos SET {sets}, missing=0, "
+            "lat=CASE WHEN geo_src IS NOT 'manual' THEN ? ELSE lat END, "
+            "lon=CASE WHEN geo_src IS NOT 'manual' THEN ? ELSE lon END, "
+            "geo_src=CASE WHEN geo_src IS NOT 'manual' THEN ? ELSE geo_src END "
+            "WHERE id=?",
+            [meta[c] for c in VIDEO_COLUMNS] + [meta["lat"], meta["lon"], meta["geo_src"], existing["id"]],
+        )
         res.updated += 1
         res.new_ids.append(existing["id"])  # regenerar miniatura
         return
@@ -100,10 +108,10 @@ def _store(conn, meta: dict, res: ImportResult) -> None:
                          (meta["path"], meta["folder"], meta["filename"], meta["mtime"], cand["id"]))
             res.moved += 1
             return
-    cols = VIDEO_COLUMNS + ["imported_at"]
+    cols = VIDEO_COLUMNS + ["lat", "lon", "geo_src", "imported_at"]
     cur = conn.execute(
         f"INSERT INTO videos({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
-        [meta[c] for c in VIDEO_COLUMNS] + [now_iso()],
+        [meta[c] for c in VIDEO_COLUMNS] + [meta["lat"], meta["lon"], meta["geo_src"], now_iso()],
     )
     res.added += 1
     res.new_ids.append(cur.lastrowid)

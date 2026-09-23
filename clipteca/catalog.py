@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings(
@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS videos(
     trim_in       REAL,
     trim_out      REAL,
     missing       INTEGER NOT NULL DEFAULT 0,
+    lat           REAL,
+    lon           REAL,
+    geo_src       TEXT,          -- 'exif' | 'manual'
     imported_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_videos_folder  ON videos(folder);
@@ -114,6 +117,10 @@ class Video:
     def is_hdr(self) -> bool:
         return (self.row.get("color_trc") or "") in ("arib-std-b67", "smpte2084")
 
+    @property
+    def has_gps(self) -> bool:
+        return self.row.get("lat") is not None
+
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Video":
         d = dict(r)
@@ -150,7 +157,17 @@ class Catalog:
             self.set_setting("created_at", now_iso())
         elif ver > SCHEMA_VERSION:
             raise RuntimeError("Este catálogo lo creó una versión más nueva de Clipteca")
+        elif ver < SCHEMA_VERSION:
+            self._migrate(ver)
+            self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self.conn.commit()
+
+    def _migrate(self, ver: int) -> None:
+        """Añade columnas nuevas a catálogos creados con un esquema anterior."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(videos)")}
+        for col, decl in (("lat", "REAL"), ("lon", "REAL"), ("geo_src", "TEXT")):
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE videos ADD COLUMN {col} {decl}")
 
     def close(self) -> None:
         self.conn.close()
@@ -243,6 +260,18 @@ class Catalog:
 
     def set_trim(self, video_id: int, trim_in: float | None, trim_out: float | None) -> None:
         self.conn.execute("UPDATE videos SET trim_in=?, trim_out=? WHERE id=?", (trim_in, trim_out, video_id))
+        self.conn.commit()
+
+    def set_location(self, video_id: int, lat: float, lon: float) -> None:
+        self.conn.execute(
+            "UPDATE videos SET lat=?, lon=?, geo_src='manual' WHERE id=?", (lat, lon, video_id)
+        )
+        self.conn.commit()
+
+    def clear_location(self, video_id: int) -> None:
+        self.conn.execute(
+            "UPDATE videos SET lat=NULL, lon=NULL, geo_src=NULL WHERE id=?", (video_id,)
+        )
         self.conn.commit()
 
     def remove(self, ids: list[int]) -> None:

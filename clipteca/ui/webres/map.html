@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="leaflet.css">
+<style>
+  html, body, #map { height: 100%; margin: 0; background: #ddd; }
+  .clipteca-pin {
+    width: 14px; height: 14px; border-radius: 50% 50% 50% 0;
+    transform: rotate(-45deg); border: 2px solid #111;
+    box-shadow: 0 1px 3px rgba(0,0,0,.6);
+  }
+  .clipteca-pin.picked { background: #4caf50; }
+  .clipteca-current { outline: 3px solid #ffb300; outline-offset: 1px; }
+  .clipteca-cluster {
+    background: #2b7fff; color: #fff; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font: 12px/1 sans-serif; width: 30px; height: 30px;
+    border: 2px solid #111; box-shadow: 0 1px 3px rgba(0,0,0,.6);
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="leaflet.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+  var map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
+  // tile.openstreetmap.org bloquea el uso directo desde apps de escritorio (ver
+  // políticas de OSMF) y los tiles gratuitos de CARTO ahora exigen API key, así que
+  // se usa el espejo comunitario de OpenStreetMap France (mismo aspecto "clásico" de OSM).
+  L.tileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', {
+    maxZoom: 20,
+    subdomains: 'abc',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+
+  var pinIcon = L.divIcon({ className: '', html: '<div class="clipteca-pin picked"></div>', iconSize: [14, 14], iconAnchor: [7, 12] });
+  var markers = {};   // id -> L.Marker
+  var layer = L.layerGroup().addTo(map);
+  var bridge = null;
+
+  function clearMarkers() {
+    layer.clearLayers();
+    markers = {};
+  }
+
+  function setMarkers(videos) {
+    // No mueve la vista: si el usuario acaba de encuadrar el mapa para soltar un
+    // pin con precisión, un refresco de datos no debe cambiarle el zoom/centro.
+    clearMarkers();
+    videos.forEach(function (v) {
+      var m = L.marker([v.lat, v.lon], { icon: pinIcon, title: v.filename });
+      m.on('click', function () { if (bridge) bridge.markerClicked(v.id); });
+      m.addTo(layer);
+      markers[v.id] = m;
+    });
+  }
+
+  function fitMarkers() {
+    var pts = Object.keys(markers).map(function (id) { return markers[id].getLatLng(); });
+    if (pts.length === 1) {
+      map.setView(pts[0], Math.max(map.getZoom(), 12));
+    } else if (pts.length > 1) {
+      map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 });
+    }
+  }
+
+  function highlightMarker(id) {
+    Object.keys(markers).forEach(function (k) {
+      markers[k].getElement() && markers[k].getElement().classList.remove('clipteca-current');
+    });
+    var m = markers[id];
+    if (m) {
+      m.getElement() && m.getElement().classList.add('clipteca-current');
+      map.panTo(m.getLatLng());
+    }
+  }
+
+  function containerPointToLatLng(x, y) {
+    // runJavaScript() de PySide6 no deserializa objetos JS: se devuelve JSON.
+    var ll = map.containerPointToLatLng([x, y]);
+    return JSON.stringify({ lat: ll.lat, lon: ll.lng });
+  }
+
+  new QWebChannel(qt.webChannelTransport, function (channel) {
+    bridge = channel.objects.bridge;
+  });
+</script>
+</body>
+</html>

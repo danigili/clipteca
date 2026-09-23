@@ -207,6 +207,12 @@ def write_embedded(dst: Path, src: str, item: ExportItem, cap: datetime | None,
         if tz is not None:
             args.append(f"-Keys:CreationDate={_exif_date(cap, tz)}")
         args.append(f"-XMP-xmp:CreateDate={_exif_date(cap, tz)}")
+    lat, lon = v.row.get("lat"), v.row.get("lon")
+    if lat is not None and lon is not None:
+        args += [
+            f"-GPSLatitude={abs(lat)}", f"-GPSLatitudeRef={'N' if lat >= 0 else 'S'}",
+            f"-GPSLongitude={abs(lon)}", f"-GPSLongitudeRef={'E' if lon >= 0 else 'W'}",
+        ]
     if opts.write_tags:
         for kw in item.keywords + item.people:
             args += [f"-XMP-dc:Subject-={kw}", f"-XMP-dc:Subject+={kw}"]

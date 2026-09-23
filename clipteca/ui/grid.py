@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractListModel, QMimeData, QModelIndex, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap, QPixmapCache
 from PySide6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDelegate
 
@@ -12,6 +12,7 @@ from ..media import fmt_duration
 from . import theme
 
 VideoRole = Qt.UserRole + 1
+VIDEO_ID_MIME = "application/x-clipteca-video-id"
 
 
 class VideoModel(QAbstractListModel):
@@ -42,6 +43,12 @@ class VideoModel(QAbstractListModel):
         if role == Qt.ToolTipRole:
             return v.path
         return None
+
+    def flags(self, index):
+        f = super().flags(index)
+        if index.isValid():
+            f |= Qt.ItemIsDragEnabled
+        return f
 
     def pixmap(self, v: Video) -> QPixmap | None:
         if not self.catalog:
@@ -79,6 +86,18 @@ class VideoModel(QAbstractListModel):
         if r is not None:
             idx = self.index(r)
             self.dataChanged.emit(idx, idx)
+
+    # --- arrastrar un vídeo hacia el mapa -------------------------------
+    def mimeTypes(self):
+        return [VIDEO_ID_MIME]
+
+    def mimeData(self, indexes):
+        ids = sorted({str(self.videos[i.row()].id) for i in indexes if i.isValid()})
+        if not ids:
+            return None
+        data = QMimeData()
+        data.setData(VIDEO_ID_MIME, ",".join(ids).encode("ascii"))
+        return data
 
 
 class VideoDelegate(QStyledItemDelegate):
@@ -146,6 +165,8 @@ class VideoDelegate(QStyledItemDelegate):
             txt = f"✂ {fmt_duration(dur)}"
             w = p.fontMetrics().horizontalAdvance(txt) + 14
             self._badge(p, QRect(tr.right() - w - 6, tr.y() + 6, w, 18), txt, "#cc000000", theme.TRIM, small)
+        if pm is not None:
+            self._gps_pin(p, QRect(tr.x() + 6, tr.bottom() - 22, 16, 16), v.has_gps)
 
         # textos
         p.setFont(small)
@@ -173,6 +194,23 @@ class VideoDelegate(QStyledItemDelegate):
         p.setFont(font)
         p.drawText(rect, Qt.AlignCenter, text)
 
+    @staticmethod
+    def _gps_pin(p, rect: QRect, has_gps: bool):
+        """Pin de ubicación estilo Lightroom: relleno si hay coordenadas, contorno si no."""
+        r = QRectF(rect).adjusted(2, 2, -2, -4)
+        path = QPainterPath()
+        path.addEllipse(r)
+        color = QColor(theme.GPS if has_gps else theme.TEXT_DIM)
+        if has_gps:
+            p.fillPath(path, color)
+        else:
+            p.setOpacity(0.7)
+            pen = p.pen()
+            p.setPen(color)
+            p.drawPath(path)
+            p.setPen(pen)
+            p.setOpacity(1.0)
+
 
 class GridView(QListView):
     activated_video = Signal(int)
@@ -192,6 +230,8 @@ class GridView(QListView):
         self.setMouseTracking(True)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragOnly)
         self.doubleClicked.connect(lambda idx: self.activated_video.emit(idx.row()))
 
     def keyPressEvent(self, e):
@@ -203,3 +243,11 @@ class GridView(QListView):
     def set_thumb_width(self, w: int):
         self.delegate.thumb_w = w
         self.model().layoutChanged.emit()
+
+    def set_filmstrip_mode(self, on: bool):
+        """Tira horizontal de una sola fila (vista de mapa), en vez de cuadrícula."""
+        self.setFlow(QListView.LeftToRight if on else QListView.TopToBottom)
+        self.setWrapping(not on)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded if on else Qt.ScrollBarAlwaysOff)
+        if on:
+            self.setFixedHeight(self.delegate.sizeHint(None, QModelIndex()).height() + 6)

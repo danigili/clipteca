@@ -13,6 +13,7 @@ PICK = "#5fb36b"
 REJECT = "#d9534f"
 TRIM = "#e0a526"
 HDR = "#b48ce0"
+GPS = "#2b7fff"
 
 
 def apply(app: QApplication) -> None:

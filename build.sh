@@ -6,6 +6,8 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 ./.venv/bin/pyinstaller --noconfirm --clean --windowed --name Clipteca \
-    --collect-submodules clipteca run.py
+    --collect-submodules clipteca \
+    --add-data "clipteca/ui/webres:clipteca/ui/webres" \
+    run.py
 
 echo "Listo: dist/Clipteca/Clipteca"
