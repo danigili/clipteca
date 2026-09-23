@@ -1,8 +1,12 @@
 # Clipteca
 
+*[Read this in English](README.en.md)*
+
 Catálogo de vídeos al estilo Lightroom: un fichero `.clipteca` (SQLite) donde tú quieras, importas carpetas, marcas **P**/**X**, recortas, etiquetas palabras clave y personas, y exportas. Los originales nunca se modifican.
 
-## Instalación (Windows)
+## Instalación
+
+### Windows
 
 Requisitos: Python 3.11+ (`py` launcher).
 
@@ -14,6 +18,17 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1   # venv + ffmpeg + exiftoo
 Ejecutable portable: `.\build.ps1` → `dist\Clipteca\Clipteca.exe` (lleva `bin\` al lado).
 
 Si `setup.ps1` no puede extraer el `.7z` de libmpv, descomprímelo con 7-Zip y copia `libmpv-2.dll` a `bin\`. Sin libmpv la app usa QtMultimedia: funciona, pero sin tone mapping HDR ni paso exacto de fotogramas.
+
+### Linux
+
+Requisitos: Python 3.11+ y el gestor de paquetes de tu distro (apt/dnf/pacman).
+
+```bash
+./setup.sh   # venv + ffmpeg + exiftool + libmpv del sistema (apt/dnf/pacman)
+./.venv/bin/python run.py
+```
+
+Ejecutable portable: `./build.sh` → `dist/Clipteca/Clipteca` (usa las herramientas del `PATH` del sistema, no necesita `bin\`).
 
 ## Uso
 
