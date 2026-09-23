@@ -1,0 +1,1 @@
+Coloca aquí ffmpeg.exe, ffprobe.exe, exiftool.exe (+ exiftool_files) y libmpv-2.dll. setup.ps1 lo hace automáticamente.
