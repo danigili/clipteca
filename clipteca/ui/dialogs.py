@@ -117,13 +117,30 @@ class ExportDialog(QDialog):
         form.addRow("Si ya existe", self.conflict)
         lay.addLayout(form)
 
-        self.compress = QCheckBox("Comprimir mucho: HEVC, máx. 1080p, ~1.8 Mbps")
+        self.compress = QCheckBox("Comprimir mucho: HEVC con CRF + tope de bitrate")
         self.compress.setToolTip(
-            "Ignora el modo de recorte y la calidad de arriba: siempre recodifica a HEVC, "
-            "reescala hacia abajo a 1080p y limita el bitrate (CRF con tope de tamaño)."
+            "Ignora el modo de recorte y la calidad de arriba: siempre recodifica a HEVC "
+            "con un tope de bitrate según la resolución, para que las escenas complicadas "
+            "no se disparen de tamaño."
         )
         self.compress.toggled.connect(lambda _: self._update_mode_enabled())
         lay.addWidget(self.compress)
+
+        cform = QFormLayout()
+        self.compress_res = QComboBox()
+        for text, val in (("2160p (4K)", 2160), ("1440p", 1440), ("1080p (recomendado)", 1080),
+                          ("720p", 720), ("480p", 480), ("Original (sin reescalar)", 0)):
+            self.compress_res.addItem(text, val)
+        self.compress_res.setCurrentIndex(2)
+        cform.addRow("Resolución máx.", self.compress_res)
+        self.compress_crf = QSpinBox()
+        self.compress_crf.setRange(18, 35)
+        self.compress_crf.setValue(28)
+        self.compress_crf.setToolTip("CRF de HEVC. Menor = más calidad y más peso (dentro del tope de bitrate).")
+        cform.addRow("Calidad (CRF)", self.compress_crf)
+        self.compress_hdr = QCheckBox("Mantener HDR (si no, se convierte a SDR)")
+        cform.addRow("", self.compress_hdr)
+        lay.addLayout(cform)
 
         self.keep = QCheckBox("Mantener la estructura de subcarpetas (fechas)")
         self.keep.setChecked(True)
@@ -151,10 +168,12 @@ class ExportDialog(QDialog):
         compressing = self.compress.isChecked()
         self.mode.setEnabled(not compressing)
         self.crf.setEnabled(not compressing and bool(self.mode.currentData()))
+        for w in (self.compress_res, self.compress_crf, self.compress_hdr):
+            w.setEnabled(compressing)
         if compressing:
-            self.note.setText("Se recodifica siempre a HEVC 1080p con bitrate limitado (~1.8 Mbps vídeo + "
-                              "128 kbps audio AAC). El HDR se convierte a SDR. Pensado para compartir, no "
-                              "para conservar calidad original.")
+            self.note.setText("Se recodifica siempre a HEVC con bitrate limitado según la resolución elegida "
+                              "(audio AAC 128 kbps). Pensado para compartir/ahorrar espacio, no para conservar "
+                              "la calidad original.")
         else:
             self.note.setText("En modo sin pérdida el inicio real puede adelantarse hasta el fotograma clave "
                               "anterior (≈1 s en móviles). Formato, códec y HDR se mantienen.")
@@ -182,6 +201,9 @@ class ExportDialog(QDialog):
             precise=bool(self.mode.currentData()),
             crf=self.crf.value(),
             compress=self.compress.isChecked(),
+            compress_crf=self.compress_crf.value(),
+            compress_keep_hdr=self.compress_hdr.isChecked(),
+            compress_resolution=self.compress_res.currentData(),
             date_shift=self.shift.isChecked(),
             keep_structure=self.keep.isChecked(),
             conflict=self.conflict.currentData(),

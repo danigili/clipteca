@@ -131,12 +131,21 @@ class VideoDelegate(QStyledItemDelegate):
         p.fillRect(tr, QColor(theme.BG))
         pm = self.model.pixmap(v)
         if pm is not None:
-            s = pm.size().scaled(tr.size(), Qt.KeepAspectRatio)
+            box = QSize(tr.height(), tr.width()) if v.rot_offset in (90, 270) else tr.size()
+            s = pm.size().scaled(box, Qt.KeepAspectRatio)
             target = QRect(0, 0, s.width(), s.height())
             target.moveCenter(tr.center())
             if v.flag == -1:
                 p.setOpacity(0.35)
-            p.drawPixmap(target, pm)
+            if v.rot_offset:
+                p.save()
+                p.translate(tr.center())
+                p.rotate(v.rot_offset)
+                p.translate(-tr.center())
+                p.drawPixmap(target, pm)
+                p.restore()
+            else:
+                p.drawPixmap(target, pm)
             p.setOpacity(1.0)
         elif v.missing:
             p.setPen(QColor(theme.REJECT))

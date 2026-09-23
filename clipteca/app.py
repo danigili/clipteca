@@ -157,6 +157,8 @@ class MainWindow(QMainWindow):
         self.map_view = MapView()
         self.map_view.marker_clicked.connect(self._select_video_id)
         self.map_view.location_dropped.connect(self._locations_dropped)
+        self.map_view.thumbs = self.thumbs
+        self.thumbs.ready.connect(self.map_view.thumb_ready)
 
         # Filmstrip (como el módulo de mapa de Lightroom): comparte modelo y
         # selección con la cuadrícula grande, así que arrastrar un vídeo al mapa
@@ -189,6 +191,7 @@ class MainWindow(QMainWindow):
         self.inspector.tag_removed.connect(self.remove_tag)
         self.inspector.clear_trim_requested.connect(lambda: self._commit_trim(None, None))
         self.inspector.clear_location_requested.connect(self._clear_location)
+        self.inspector.rotate_requested.connect(self.rotate_selected)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(left)
@@ -226,6 +229,9 @@ class MainWindow(QMainWindow):
         self._act(m, "Seleccionar (P)", lambda: self.set_flag(1), "P")
         self._act(m, "Rechazar (X)", lambda: self.set_flag(-1), "X")
         self._act(m, "Quitar marca (U)", lambda: self.set_flag(0), "U")
+        m.addSeparator()
+        self._act(m, "Rotar izquierda", lambda: self.rotate_selected(-90), "[")
+        self._act(m, "Rotar derecha", lambda: self.rotate_selected(90), "]")
         m.addSeparator()
         self._act(m, "Añadir palabra clave", lambda: self._focus_tag("keyword"), "Ctrl+K")
         self._act(m, "Añadir persona", lambda: self._focus_tag("person"), "Ctrl+Shift+K")
@@ -357,6 +363,7 @@ class MainWindow(QMainWindow):
             self.catalog.close()
         self.catalog = cat
         self.model.catalog = cat
+        self.map_view.catalog = cat
         self.filter = Filter()
         self.settings.setValue("last_catalog", str(path))
         self.settings.setValue("last_dir", str(path.parent))
@@ -585,6 +592,7 @@ class MainWindow(QMainWindow):
         self.timeline.set_duration(v.duration or 0)
         self.timeline.set_trim(v.trim_in, v.trim_out)
         self._trim_label(v.trim_in, v.trim_out)
+        self.player.set_rotation((v.row.get("rotation") or 0) + v.rot_offset)
         if v.id == self.loaded_id:
             return
         self.loaded_id = v.id
@@ -710,6 +718,17 @@ class MainWindow(QMainWindow):
         self.model.refresh_ids([v.id])
         self.map_view.set_videos(self.model.videos)
         self._selection_changed()
+
+    def rotate_selected(self, delta: int):
+        vids = self.selected_videos()
+        if not vids or not self.catalog:
+            return
+        ids = [v.id for v in vids]
+        self.catalog.rotate(ids, delta)
+        self.model.refresh_ids(ids)
+        self._selection_changed()
+        if self.stack.currentIndex() == 1:
+            self._load_current()
 
     # ============================================================ marcas
     def set_flag(self, flag: int):

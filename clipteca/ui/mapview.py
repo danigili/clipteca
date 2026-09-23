@@ -10,7 +10,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from .. import tools
-from ..catalog import Video
+from ..catalog import Catalog, Video
 from .grid import VIDEO_ID_MIME
 
 
@@ -82,6 +82,8 @@ class MapView(QWidget):
 
         self._loaded = False
         self._pending_videos: list[Video] = []
+        self.catalog: Catalog | None = None
+        self.thumbs = None  # ThumbnailManager
         self.view.loadFinished.connect(self._on_load_finished)
         self.view.load(QUrl.fromLocalFile(str(tools.webres_dir() / "map.html")))
 
@@ -92,7 +94,16 @@ class MapView(QWidget):
 
     def set_videos(self, videos: list[Video]) -> None:
         self._pending_videos = [v for v in videos if v.has_gps]
+        if self.catalog and self.thumbs:
+            for v in self._pending_videos:
+                tp = self.catalog.thumb_path(v.id)
+                if not tp.exists():
+                    self.thumbs.request(v, tp)
         if self._loaded:
+            self._push_markers()
+
+    def thumb_ready(self, video_id: int) -> None:
+        if self._loaded and any(v.id == video_id for v in self._pending_videos):
             self._push_markers()
 
     def fit_to_markers(self) -> None:
@@ -102,10 +113,14 @@ class MapView(QWidget):
             self.view.page().runJavaScript("fitMarkers();")
 
     def _push_markers(self) -> None:
-        data = [
-            {"id": v.id, "lat": v.row["lat"], "lon": v.row["lon"], "filename": v.filename}
-            for v in self._pending_videos
-        ]
+        data = []
+        for v in self._pending_videos:
+            item = {"id": v.id, "lat": v.row["lat"], "lon": v.row["lon"], "filename": v.filename}
+            if self.catalog:
+                tp = self.catalog.thumb_path(v.id)
+                if tp.exists():
+                    item["thumb"] = QUrl.fromLocalFile(str(tp)).toString()
+            data.append(item)
         self.view.page().runJavaScript(f"setMarkers({json.dumps(data)});")
 
     def highlight(self, video_id: int) -> None:

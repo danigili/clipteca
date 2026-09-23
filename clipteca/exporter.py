@@ -25,15 +25,19 @@ ENCODERS = {  # codec origen -> (encoder, args de calidad)
     "av1": ("libsvtav1", lambda crf: ["-crf", str(crf + 10), "-preset", "8"]),
 }
 
-# Modo "comprimir mucho": HEVC con CRF fijo (calidad constante) tope de
+# Modo "comprimir mucho": HEVC con CRF fijo (calidad constante) y tope de
 # bitrate/bufsize (VBV) para que las escenas complicadas no se disparen de
-# tamaño — el híbrido habitual en encoders de entrega, similar al recorte de
-# WhatsApp pero con mejor calidad por bit gracias a HEVC.
-COMPRESS_MAX_LONG_EDGE = 1920
-COMPRESS_MAX_SHORT_EDGE = 1080
-COMPRESS_CRF = 28
-COMPRESS_MAXRATE = "1800k"
-COMPRESS_BUFSIZE = "3600k"
+# tamaño — el híbrido habitual en encoders de entrega. El bitrate tope escala
+# con la resolución elegida (a más resolución, más bits o se ve fatal).
+# resolución (lado corto) -> (lado largo, maxrate, bufsize)
+COMPRESS_RESOLUTIONS = {
+    2160: (3840, "16000k", "32000k"),
+    1440: (2560, "8000k",  "16000k"),
+    1080: (1920, "3600k",  "7200k"),
+    720:  (1280, "2000k",  "4000k"),
+    480:  (854,  "1200k",  "2400k"),
+    0:    (0,    "5000k",  "10000k"),   # 0 = resolución original, sin reescalar
+}
 COMPRESS_AUDIO_BITRATE = "128k"
 
 
@@ -42,7 +46,10 @@ class ExportOptions:
     dest: Path
     precise: bool = False          # False = corte sin pérdida en keyframe; True = recodifica
     crf: int = 18
-    compress: bool = False         # HEVC, máx. 1080p, CRF+bitrate tope (ignora precise/crf)
+    compress: bool = False         # HEVC, tope de bitrate (ignora precise/crf)
+    compress_crf: int = 28
+    compress_keep_hdr: bool = False   # False = tonemapea a SDR (más compatible/ligero)
+    compress_resolution: int = 1080   # lado corto en px; 0 = no reescalar
     date_shift: bool = False       # True = fecha de captura + inicio del recorte
     keep_structure: bool = True    # recrea subcarpetas relativas a la raíz común
     conflict: str = "rename"       # rename | skip | overwrite
@@ -124,22 +131,33 @@ def set_file_times(path: Path, dt: datetime) -> None:
 
 # --- ffmpeg ------------------------------------------------------------
 
-def _compress_filter(v: Video) -> str:
-    """Escala hacia abajo (máx. 1920 en el lado largo, 1080 en el corto, sin ampliar
-    ni importar la orientación) y, si el original es HDR, tonemapea a SDR antes de
-    reinterpretar los píxeles como BT.709 (si no, sale lavado/oscuro)."""
+def _compress_filter(v: Video, opts: ExportOptions) -> str | None:
+    """Tonemapea HDR→SDR (salvo que se pida mantener HDR) y escala hacia abajo a la
+    resolución elegida (sin ampliar, respeta la orientación); nunca reinterpreta
+    píxeles HDR como BT.709 directamente, o sale lavado/oscuro."""
+    is_hdr = (v.row.get("color_trc") or "") in ("arib-std-b67", "smpte2084")
     filters = []
-    if (v.row.get("color_trc") or "") in ("arib-std-b67", "smpte2084"):
+    if is_hdr and not opts.compress_keep_hdr:
         filters.append(
             "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
             "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
         )
-    filters.append(
-        f"scale='if(gt(a,1),{COMPRESS_MAX_LONG_EDGE},{COMPRESS_MAX_SHORT_EDGE})':"
-        f"'if(gt(a,1),{COMPRESS_MAX_SHORT_EDGE},{COMPRESS_MAX_LONG_EDGE})':"
-        "force_original_aspect_ratio=decrease:force_divisible_by=2"
-    )
-    return ",".join(filters)
+    long_edge, _, _ = COMPRESS_RESOLUTIONS.get(opts.compress_resolution, COMPRESS_RESOLUTIONS[1080])
+    if long_edge:
+        short_edge = opts.compress_resolution
+        filters.append(
+            f"scale='if(gt(a,1),{long_edge},{short_edge})':'if(gt(a,1),{short_edge},{long_edge})':"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2"
+        )
+    return ",".join(filters) if filters else None
+
+
+def _rotate_filter(v: Video) -> str | None:
+    """Filtro `transpose` para hornear la rotación manual del usuario en los píxeles."""
+    n = (v.rot_offset // 90) % 4
+    if n == 0:
+        return None
+    return ",".join(["transpose=1"] * n) if n <= 2 else "transpose=2"  # 270° = 90° CCW
 
 
 def ffmpeg_args(v: Video, src: str, dst: str, start: float, dur: float, opts: ExportOptions) -> list[str]:
@@ -151,18 +169,33 @@ def ffmpeg_args(v: Video, src: str, dst: str, start: float, dur: float, opts: Ex
          "-ss", f"{start:.3f}", "-i", src, "-t", f"{dur:.3f}",
          "-map", "0:v:0", "-map", "0:a?",   # evita pistas de datos (giroscopio, etc.)
          "-map_metadata", "0", "-map_chapters", "-1"]
+    rot_filter = _rotate_filter(v)
     out_is_hevc = False
     if opts.compress:
-        a += ["-vf", _compress_filter(v),
-              "-c:v", "libx265", "-crf", str(COMPRESS_CRF), "-preset", "medium",
-              "-maxrate", COMPRESS_MAXRATE, "-bufsize", COMPRESS_BUFSIZE,
-              "-pix_fmt", "yuv420p",
-              "-c:a", "aac", "-b:a", COMPRESS_AUDIO_BITRATE, "-ac", "2"]
+        is_hdr = (v.row.get("color_trc") or "") in ("arib-std-b67", "smpte2084")
+        keep_hdr = is_hdr and opts.compress_keep_hdr
+        _, maxrate, bufsize = COMPRESS_RESOLUTIONS.get(opts.compress_resolution, COMPRESS_RESOLUTIONS[1080])
+        cf = _compress_filter(v, opts)
+        vf = rot_filter + "," + cf if (rot_filter and cf) else (rot_filter or cf)
+        if vf:
+            a += ["-vf", vf]
+        a += ["-c:v", "libx265", "-crf", str(opts.compress_crf), "-preset", "medium",
+              "-maxrate", maxrate, "-bufsize", bufsize,
+              "-pix_fmt", "yuv420p10le" if keep_hdr else "yuv420p"]
+        if keep_hdr:
+            for opt, key in (("-color_primaries", "color_primaries"), ("-color_trc", "color_trc"),
+                             ("-colorspace", "color_space")):
+                val = v.row.get(key)
+                if val and val != "unknown":
+                    a += [opt, val]
+        a += ["-c:a", "aac", "-b:a", COMPRESS_AUDIO_BITRATE, "-ac", "2"]
         out_is_hevc = True
-    elif opts.precise:
+    elif opts.precise or rot_filter:
         vc = v.row.get("vcodec") or ""
         enc, q = ENCODERS.get(vc, ENCODERS["h264"])
         a += ["-c:v", enc, *q(opts.crf)]
+        if rot_filter:
+            a += ["-vf", rot_filter]
         pf = v.row.get("pix_fmt") or ""
         a += ["-pix_fmt", "yuv420p10le" if "10" in pf else "yuv420p"]
         for opt, key in (("-color_primaries", "color_primaries"), ("-color_trc", "color_trc"),
@@ -331,8 +364,9 @@ def export_one(item: ExportItem, dst: Path, opts: ExportOptions,
     start, dur, trimmed = trim_range(v)
     cap = output_capture_time(v, opts)
     shifted = trimmed and opts.date_shift and bool(v.trim_in)
+    reencode = trimmed or opts.precise or opts.compress or v.rot_offset != 0
     try:
-        if trimmed or opts.precise or opts.compress:
+        if reencode:
             if dur is None:
                 start, dur = 0.0, v.duration or 0.0
             run_ffmpeg(ffmpeg_args(v, src, str(tmp), start, dur, opts), dur, on_progress, cancelled)
@@ -342,8 +376,7 @@ def export_one(item: ExportItem, dst: Path, opts: ExportOptions,
             on_progress(1.0)
         embed = dst.suffix.lower() in XMP_EMBED_EXTS
         if embed:
-            write_embedded(tmp, src, item, cap, copy_from_src=trimmed or opts.precise or opts.compress,
-                           shifted=shifted, opts=opts)
+            write_embedded(tmp, src, item, cap, copy_from_src=reencode, shifted=shifted, opts=opts)
         os.replace(tmp, dst)
         if not embed and opts.write_tags and (item.keywords or item.people or cap):
             write_sidecar(dst, item, cap)

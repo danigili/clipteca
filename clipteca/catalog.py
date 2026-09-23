@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings(
@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS videos(
     flag          INTEGER NOT NULL DEFAULT 0,   -- 1 = P, -1 = X, 0 = sin marcar
     trim_in       REAL,
     trim_out      REAL,
+    rot_offset    INTEGER NOT NULL DEFAULT 0,   -- rotación manual añadida por el usuario
     missing       INTEGER NOT NULL DEFAULT 0,
     lat           REAL,
     lon           REAL,
@@ -124,6 +125,10 @@ class Video:
     def has_gps(self) -> bool:
         return self.row.get("lat") is not None
 
+    @property
+    def rot_offset(self) -> int:
+        return self.row.get("rot_offset") or 0
+
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Video":
         d = dict(r)
@@ -171,7 +176,8 @@ class Catalog:
         """Añade columnas nuevas a catálogos creados con un esquema anterior."""
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(videos)")}
         for col, decl in (("lat", "REAL"), ("lon", "REAL"), ("geo_src", "TEXT"),
-                          ("camera_model", "TEXT")):
+                          ("camera_model", "TEXT"),
+                          ("rot_offset", "INTEGER NOT NULL DEFAULT 0")):
             if col not in cols:
                 self.conn.execute(f"ALTER TABLE videos ADD COLUMN {col} {decl}")
 
@@ -276,6 +282,15 @@ class Catalog:
 
     def set_trim(self, video_id: int, trim_in: float | None, trim_out: float | None) -> None:
         self.conn.execute("UPDATE videos SET trim_in=?, trim_out=? WHERE id=?", (trim_in, trim_out, video_id))
+        self.conn.commit()
+
+    def rotate(self, ids: list[int], delta: int) -> None:
+        """Añade `delta` grados (±90) a la rotación manual de cada vídeo."""
+        for i in ids:
+            r = self.conn.execute("SELECT rot_offset FROM videos WHERE id=?", (i,)).fetchone()
+            if r is None:
+                continue
+            self.conn.execute("UPDATE videos SET rot_offset=? WHERE id=?", ((r[0] + delta) % 360, i))
         self.conn.commit()
 
     def set_location(self, video_id: int, lat: float, lon: float) -> None:

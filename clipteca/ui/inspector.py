@@ -62,6 +62,7 @@ class Inspector(QScrollArea):
     tag_removed = Signal(str, str)       # kind, name
     clear_trim_requested = Signal()
     clear_location_requested = Signal()
+    rotate_requested = Signal(int)       # -90 | +90
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,6 +88,15 @@ class Inspector(QScrollArea):
             b.clicked.connect(lambda checked, val=val: self.flag_requested.emit(val if checked else 0))
             flags.addWidget(b)
         lay.addLayout(flags)
+
+        rot = QHBoxLayout()
+        self.btn_rot_left = QPushButton("↺ Rotar izq.")
+        self.btn_rot_right = QPushButton("↻ Rotar der.")
+        self.btn_rot_left.clicked.connect(lambda: self.rotate_requested.emit(-90))
+        self.btn_rot_right.clicked.connect(lambda: self.rotate_requested.emit(90))
+        rot.addWidget(self.btn_rot_left)
+        rot.addWidget(self.btn_rot_right)
+        lay.addLayout(rot)
 
         self.info = QFormLayout()
         self.info.setLabelAlignment(Qt.AlignRight)
@@ -130,7 +140,8 @@ class Inspector(QScrollArea):
     def show_videos(self, videos: list[Video], tags: dict[str, list[str]]):
         n = len(videos)
         enabled = n > 0
-        for w in (self.btn_pick, self.btn_reject, self.keywords, self.people):
+        for w in (self.btn_pick, self.btn_reject, self.keywords, self.people,
+                  self.btn_rot_left, self.btn_rot_right):
             w.setEnabled(enabled)
         partial = n > 1
         self.keywords.set_tags(tags["keyword"], partial)
